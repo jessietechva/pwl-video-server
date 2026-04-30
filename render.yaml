@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: pwl-video-server
+    runtime: python
+    buildCommand: pip install -r requirements.txt && apt-get update && apt-get install -y ffmpeg
+    startCommand: gunicorn app:app
+    plan: free
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0

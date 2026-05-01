@@ -4,7 +4,7 @@ import subprocess, os, requests, tempfile, uuid
 app = Flask(__name__)
 
 def download_file(url, dest_path):
-    r = requests.get(url, stream=True, timeout=60)
+    r = requests.get(url, stream=True, timeout=120)
     r.raise_for_status()
     with open(dest_path, 'wb') as f:
         for chunk in r.iter_content(chunk_size=8192):
@@ -12,7 +12,11 @@ def download_file(url, dest_path):
 
 @app.route('/')
 def index():
-    return 'PWL Video Server running!'
+    try:
+        result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
+        return 'FFmpeg OK: ' + result.stdout[:100]
+    except Exception as e:
+        return 'FFmpeg not found: ' + str(e)
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -56,49 +60,3 @@ def assemble_video():
             cp = os.path.join(work_dir, 'clip' + str(i) + '.mp4')
             try:
                 download_file(url, cp)
-                clip_paths.append(cp)
-            except Exception:
-                continue
-
-        if not clip_paths:
-            return jsonify({"success": False, "error": "No clips downloaded"}), 400
-
-        concat_file = os.path.join(work_dir, 'concat.txt')
-        with open(concat_file, 'w') as f:
-            for cp in clip_paths:
-                f.write("file '" + cp + "'\n")
-
-        concat_out = os.path.join(work_dir, 'concat.mp4')
-        subprocess.run([
-            'ffmpeg', '-y', '-f', 'concat', '-safe', '0',
-            '-i', concat_file, '-c', 'copy', concat_out
-        ], check=True, capture_output=True)
-
-        output_path = os.path.join(work_dir, 'pwl' + job_id + '.mp4')
-        subprocess.run([
-            'ffmpeg', '-y',
-            '-stream_loop', '-1', '-i', concat_out,
-            '-i', audio_path,
-            '-map', '0:v:0', '-map', '1:a:0',
-            '-c:v', 'libx264', '-c:a', 'aac',
-            '-shortest', '-r', '30', output_path
-        ], check=True, capture_output=True)
-
-        with open(output_path, 'rb') as f:
-            up = requests.post('https://file.io/?expires=1d',
-                files={'file': ('video.mp4', f, 'video/mp4')})
-
-        ud = up.json()
-        if ud.get('success'):
-            return jsonify({"success": True, "video_url": ud['link'], "topic": topic})
-        else:
-            return jsonify({"success": False, "error": "Upload failed"}), 500
-
-    except subprocess.CalledProcessError as e:
-        return jsonify({"success": False, "error": "FFmpeg error"}), 500
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)

@@ -13,41 +13,29 @@ def index():
     return 'PWL Video Server running!'
 
 
-@app.route('/health', methods=['GET'])
+@app.route('/health')
 def health():
     return jsonify({"status": "ok"})
-
-
-@app.route('/test-ffmpeg', methods=['GET'])
-def test_ffmpeg():
-    result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
-    return result.stdout[:200]
 
 
 @app.route('/assemble', methods=['POST'])
 def assemble_video():
     data = request.json
-    if not data:
-        return jsonify({"success": False, "error": "No data"}), 400
-
     voicerss_key = data.get('voicerss_key', '')
     voicerss_text = data.get('voicerss_text', '')
     video_urls = data.get('video_urls', [])
     topic = data.get('topic', 'video')
 
-    if not voicerss_key:
-        return jsonify({"success": False, "error": "Missing voicerss_key"}), 400
-    if not voicerss_text:
-        return jsonify({"success": False, "error": "Missing voicerss_text"}), 400
-    if not video_urls:
-        return jsonify({"success": False, "error": "Missing video_urls"}), 400
+    if not voicerss_key or not voicerss_text or not video_urls:
+        return jsonify({"success": False, "error": "Missing required fields"}), 400
 
     work_dir = tempfile.mkdtemp()
     job_id = str(uuid.uuid4())[:8]
     audio_path = os.path.join(work_dir, 'audio.mp3')
+    output_path = os.path.join(work_dir, 'output.mp4')
+    clip_path = os.path.join(work_dir, 'clip0.mp4')
     concat_file = os.path.join(work_dir, 'concat.txt')
     concat_out = os.path.join(work_dir, 'concat.mp4')
-    output_path = os.path.join(work_dir, 'output.mp4')
 
     tts = requests.post('https://api.voicerss.org/', data={
         'key': voicerss_key,
@@ -69,25 +57,25 @@ def assemble_video():
     ], capture_output=True, text=True)
 
     if not probe.stdout.strip():
-        return jsonify({"success": False, "error": "VoiceRSS failed: " + tts.text[:100]}), 400
+        return jsonify({"success": False, "error": "Audio generation failed: " + tts.text[:100]}), 400
 
-    clip_paths = []
-    for i in range(len(video_urls[:5])):
-        url = video_urls[i]
-        cp = os.path.join(work_dir, 'clip' + str(i) + '.mp4')
-        r = requests.get(url, stream=True, timeout=120)
+    clips_downloaded = []
+    for idx in range(len(video_urls)):
+        url = video_urls[idx]
+        cp = os.path.join(work_dir, 'clip' + str(idx) + '.mp4')
+        r = requests.get(url, stream=True, timeout=120, headers={'User-Agent': 'Mozilla/5.0'})
         if r.status_code == 200:
             with open(cp, 'wb') as f:
                 for chunk in r.iter_content(8192):
                     f.write(chunk)
-            if os.path.getsize(cp) > 1000:
-                clip_paths.append(cp)
+            if os.path.getsize(cp) > 10000:
+                clips_downloaded.append(cp)
 
-    if not clip_paths:
-        return jsonify({"success": False, "error": "No clips downloaded"}), 400
+    if not clips_downloaded:
+        return jsonify({"success": False, "error": "No video clips could be downloaded"}), 400
 
     with open(concat_file, 'w') as f:
-        for cp in clip_paths:
+        for cp in clips_downloaded:
             f.write("file '" + cp + "'\n")
 
     subprocess.run([
@@ -109,18 +97,4 @@ def assemble_video():
     ], capture_output=True)
 
     with open(output_path, 'rb') as f:
-        up = requests.post(
-            'https://file.io/?expires=1d',
-            files={'file': ('video.mp4', f, 'video/mp4')}
-        )
-
-    ud = up.json()
-    if ud.get('success'):
-        return jsonify({"success": True, "video_url": ud['link'], "topic": topic})
-
-    return jsonify({"success": False, "error": "Upload failed"}), 500
-
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+        up = requests.
